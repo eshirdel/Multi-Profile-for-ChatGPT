@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -s bash bin/chatgpt-profiles install.sh
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fake ChatGPT app (runners don't have the real one)
+        run: |
+          mkdir -p "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Resources"
+          cp /System/Applications/Calculator.app/Contents/Resources/AppIcon.icns "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Resources/"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Info.plist"
+
+      - name: Install from checkout and exercise every command
+        env:
+          CHATGPT_APP: ${{ runner.temp }}/Fake ChatGPT.app
+          HOME: ${{ runner.temp }}/home
+          MPFC_LAUNCHER_DIR: ${{ runner.temp }}/home/Applications
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME"
+          bash install.sh --local .
+          C="$HOME/.local/bin/chatgpt-profiles"
+          "$C" version
+          "$C" create --name "Work Laptop" --label WL --color teal
+          printf '2\nAlpha\n\n\nBeta\nB\n#123ABC\n\n' | "$C"
+          "$C" list
+          for n in "Work Laptop" Alpha Beta; do
+            L="$MPFC_LAUNCHER_DIR/ChatGPT $n.app"
+            test -s "$L/Contents/Resources/applet.icns"
+            codesign --verify "$L"
+          done
+          "$C" rebuild
+          "$C" remove Beta
+          echo Alpha | "$C" remove Alpha --purge
+          test ! -e "$HOME/.codex-alpha"
+          test -d "$HOME/.codex-beta"
+          # set -e ignores "! cmd", so check expected failures explicitly
+          if "$C" create --name "bad/name"; then echo "bad name accepted"; exit 1; fi
+          if "$C" create --name X --label TOOLONG; then echo "long label accepted"; exit 1; fi

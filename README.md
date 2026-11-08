@@ -155,6 +155,22 @@ Your original ChatGPT (`~/.codex`) is not touched and keeps working as before.
   an admin) do not show local projects. That is a workspace setting, not this
   tool.
 
+## Contributing
+
+Issues and pull requests are welcome. Please keep the tool dependency-free
+(only what ships with macOS) and compatible with the macOS system bash 3.2.
+CI runs `shellcheck` and a full create/list/rebuild/remove cycle on macOS for
+every pull request.
+
+### Releasing
+
+1. Update `VERSION` (for example `0.2.0`) and commit.
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The release workflow checks that the tag matches `VERSION`, then publishes the
+tarball, its SHA-256, and `install.sh`. Existing installs pick it up with
+`chatgpt-profiles update`.
+
 ## License
 
 Apache License 2.0. You are welcome to use, change, and contribute. If you
