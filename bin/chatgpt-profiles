@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+REPO="eshirdel/Multi-Profile-for-ChatGPT"
 
 APP="${CHATGPT_APP:-/Applications/ChatGPT.app}"
 LAUNCHER_DIR="${MPFC_LAUNCHER_DIR:-$HOME/Applications}"
@@ -33,6 +33,7 @@ while [ -L "$self" ]; do
 done
 ROOT="$(cd -P "$(dirname "$self")/.." && pwd)"
 BADGE_JS="$ROOT/lib/badge-icon.js"
+VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION" 2>/dev/null || echo dev)"
 
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -51,6 +52,7 @@ Usage:
   chatgpt-profiles remove NAME [--purge]
                                         remove the launcher; --purge also moves the
                                         profile's data to the Trash
+  chatgpt-profiles update [--check]     update this tool from the latest GitHub release
   chatgpt-profiles version
 
 COLOR is a name ($PALETTE_NAMES) or #RRGGBB.
@@ -318,6 +320,41 @@ cmd_remove() {
   fi
 }
 
+# "0.10.2" > "0.9.9" -> 0 (true)
+version_gt() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1)" = "$1" ]
+}
+
+latest_version() {
+  # /releases/latest redirects to /releases/tag/vX.Y.Z
+  curl -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | sed -n 's#.*/tag/v\{0,1\}##p'
+}
+
+cmd_update() {
+  local latest tmp base expected actual
+  latest="$(latest_version)" || true
+  [ -n "$latest" ] || die "no published release found for $REPO (or GitHub is unreachable)"
+  if ! version_gt "$latest" "$VERSION"; then
+    info "chatgpt-profiles $VERSION is up to date."
+    return
+  fi
+  info "Update available: $VERSION -> $latest"
+  [ "${1:-}" != "--check" ] || return
+  tmp="$(mktemp -d)"
+  base="https://github.com/$REPO/releases/download/v$latest"
+  curl -fsSL "$base/multi-profile-for-chatgpt.tar.gz" -o "$tmp/r.tar.gz" || die "download failed"
+  curl -fsSL "$base/multi-profile-for-chatgpt.tar.gz.sha256" -o "$tmp/r.sha256" || die "checksum download failed"
+  expected="$(awk '{print $1}' "$tmp/r.sha256")"
+  actual="$(shasum -a 256 "$tmp/r.tar.gz" | awk '{print $1}')"
+  [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "checksum mismatch, update aborted"
+  mkdir -p "$tmp/x"
+  tar -xzf "$tmp/r.tar.gz" -C "$tmp/x"
+  bash "$tmp/x/multi-profile-for-chatgpt/install.sh" --local "$tmp/x/multi-profile-for-chatgpt"
+  rm -rf "$tmp"
+  # Launchers may change between versions; profile data is never touched.
+  "${MPFC_BIN_DIR:-$HOME/.local/bin}/chatgpt-profiles" rebuild 2>/dev/null || info "Run 'chatgpt-profiles rebuild' to refresh launchers."
+}
+
 main() {
   local cmd="${1:-create}"
   [ $# -eq 0 ] || shift
@@ -332,6 +369,7 @@ main() {
     open)    cmd_open "$@" ;;
     rebuild) cmd_rebuild "$@" ;;
     remove)  cmd_remove "$@" ;;
+    update)  cmd_update "$@" ;;
     *) usage >&2; exit 2 ;;
   esac
 }

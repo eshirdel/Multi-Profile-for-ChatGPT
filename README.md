@@ -61,6 +61,40 @@ stays intact and its own updater keeps working.
 
 No other dependencies: everything uses tools that ship with macOS.
 
+## Install
+
+```bash
+curl -fsSL https://github.com/eshirdel/Multi-Profile-for-ChatGPT/releases/latest/download/install.sh | bash
+```
+
+The installer downloads the latest release, checks its SHA-256 checksum, and
+installs it to `~/.local/share/multi-profile-for-chatgpt`, with the
+`chatgpt-profiles` command linked in `~/.local/bin`. If that folder is not on
+your `PATH`, the installer prints the line to add.
+
+Prefer to read before you run? Download `install.sh` from the
+[latest release](https://github.com/eshirdel/Multi-Profile-for-ChatGPT/releases/latest),
+look at it, then run `bash install.sh`. From a clone, `./install.sh --local .`
+installs the checked-out version.
+
+## Update
+
+```bash
+chatgpt-profiles update          # install the newest release, then refresh launchers
+chatgpt-profiles update --check  # only tell me if there is one
+```
+
+Updates are verified the same way as the install. Profile data is never
+touched. ChatGPT itself keeps updating through its own built-in updater.
+
+## Uninstall
+
+```bash
+chatgpt-profiles remove <Name>            # per profile; add --purge to also trash its data
+rm -rf ~/.local/share/multi-profile-for-chatgpt ~/.local/bin/chatgpt-profiles
+rm -rf ~/.config/multi-profile-for-chatgpt
+```
+
 ## Usage
 
 Run it without arguments and answer the questions; press Enter to accept a
