@@ -1,0 +1,339 @@
+#!/bin/bash
+# Multi Profile for ChatGPT - run separate instances of the official ChatGPT app on macOS.
+# Copyright 2026 Ebrahim Shirdel. Licensed under the Apache License, Version 2.0.
+#
+# Written for the bash 3.2 that ships with macOS: no associative arrays, no ${var,,}.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+APP="${CHATGPT_APP:-/Applications/ChatGPT.app}"
+LAUNCHER_DIR="${MPFC_LAUNCHER_DIR:-$HOME/Applications}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/multi-profile-for-chatgpt"
+PROFILES_DIR="$CONFIG_DIR/profiles"
+APP_SUPPORT="$HOME/Library/Application Support"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+PALETTE_NAMES="green slate orange purple red teal pink amber"
+palette_hex() {
+  case "$1" in
+    green) echo "#16A34A" ;; slate) echo "#1F2937" ;; orange) echo "#EA580C" ;; purple) echo "#9333EA" ;;
+    red) echo "#DC2626" ;; teal) echo "#0D9488" ;; pink) echo "#DB2777" ;; amber) echo "#D97706" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Resolve the real script location so lib/ is found through a symlink in ~/.local/bin.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  dir="$(cd -P "$(dirname "$self")" && pwd)"
+  self="$(readlink "$self")"
+  case "$self" in /*) ;; *) self="$dir/$self" ;; esac
+done
+ROOT="$(cd -P "$(dirname "$self")/.." && pwd)"
+BADGE_JS="$ROOT/lib/badge-icon.js"
+
+die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+info() { printf '%s\n' "$*"; }
+
+usage() {
+  cat <<EOF
+Multi Profile for ChatGPT $VERSION (unofficial, not affiliated with OpenAI)
+
+Usage:
+  chatgpt-profiles                      interactive setup (same as "create")
+  chatgpt-profiles create               ask how many profiles to make, then their names
+  chatgpt-profiles create --name NAME [--label TEXT] [--color COLOR] [--yes]
+  chatgpt-profiles list                 show profiles and where their data lives
+  chatgpt-profiles open NAME            start a profile
+  chatgpt-profiles rebuild [NAME]       rebuild launcher(s) and icon(s), keeps all data
+  chatgpt-profiles remove NAME [--purge]
+                                        remove the launcher; --purge also moves the
+                                        profile's data to the Trash
+  chatgpt-profiles version
+
+COLOR is a name ($PALETTE_NAMES) or #RRGGBB.
+EOF
+}
+
+require_macos() {
+  [ "$(uname -s)" = "Darwin" ] || die "this tool only runs on macOS"
+  [ -d "$APP" ] || die "ChatGPT app not found at $APP (install it from OpenAI, or set CHATGPT_APP)"
+}
+
+# "Work Laptop" -> "work-laptop"
+slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr ' _' '--' | tr -cd 'a-z0-9-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'
+}
+
+# "Work Laptop" -> "Work-Laptop" (used in the app data folder name)
+folder_name() {
+  printf '%s' "$1" | tr ' ' '-' | tr -cd 'A-Za-z0-9_-'
+}
+
+valid_name() {
+  case "$1" in
+    ''|*[!A-Za-z0-9\ _-]*) return 1 ;;
+  esac
+  [ -n "$(slugify "$1")" ]
+}
+
+resolve_color() {
+  local c="$1"
+  if palette_hex "$c" >/dev/null 2>&1; then palette_hex "$c"; return; fi
+  case "$c" in
+    \#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) echo "$c" | tr '[:lower:]' '[:upper:]' ;;
+    *) return 1 ;;
+  esac
+}
+
+default_label() {
+  printf '%s' "$1" | cut -c1 | tr '[:lower:]' '[:upper:]'
+}
+
+profile_conf()   { echo "$PROFILES_DIR/$1.conf"; }
+codex_home()     { echo "$HOME/.codex-$1"; }
+user_data_dir()  { echo "$APP_SUPPORT/ChatGPT-$(folder_name "$1")"; }
+launcher_path()  { echo "$LAUNCHER_DIR/ChatGPT $1.app"; }
+
+# Reads NAME, LABEL, COLOR from a profile file without sourcing it.
+load_profile() {
+  local f
+  f="$(profile_conf "$1")"
+  [ -f "$f" ] || die "no profile named '$1' (see: chatgpt-profiles list)"
+  NAME="$(sed -n 's/^NAME=//p' "$f")"
+  LABEL="$(sed -n 's/^LABEL=//p' "$f")"
+  COLOR="$(sed -n 's/^COLOR=//p' "$f")"
+}
+
+save_profile() {
+  mkdir -p "$PROFILES_DIR"
+  printf 'NAME=%s\nLABEL=%s\nCOLOR=%s\n' "$2" "$3" "$4" > "$(profile_conf "$1")"
+}
+
+app_icon() {
+  local icon
+  icon="$(defaults read "$APP/Contents/Info.plist" CFBundleIconFile 2>/dev/null || true)"
+  [ -n "$icon" ] || icon="app"
+  case "$icon" in *.icns) ;; *) icon="$icon.icns" ;; esac
+  [ -f "$APP/Contents/Resources/$icon" ] || die "cannot find the ChatGPT icon in $APP"
+  echo "$APP/Contents/Resources/$icon"
+}
+
+build_launcher() {
+  local slug="$1" name="$2" label="$3" color="$4"
+  local launcher home data tmp out
+  launcher="$(launcher_path "$name")"
+  home="$(codex_home "$slug")"
+  data="$(user_data_dir "$name")"
+  tmp="$(mktemp -d)"
+
+  # Data folders are created but never emptied, so rebuilding is always safe.
+  mkdir -p "$home" "$data" "$LAUNCHER_DIR"
+  chmod 700 "$home"
+
+  # Same mechanism the app uses for its own extra instances.
+  cat > "$tmp/launch.applescript" <<EOF
+set codexHome to "$home"
+set userData to "$data"
+do shell script "/bin/mkdir -p " & quoted form of userData & " && /usr/bin/open -n --env CODEX_HOME=" & quoted form of codexHome & " --env CODEX_ELECTRON_USER_DATA_PATH=" & quoted form of userData & " " & quoted form of "$APP" & " --args " & quoted form of ("--user-data-dir=" & userData)
+EOF
+  rm -rf "$launcher"
+  # osacompile always prints "replacing existing signature"; only show its output on failure.
+  out="$(osacompile -o "$launcher" "$tmp/launch.applescript" 2>&1)" || die "osacompile failed: $out"
+
+  out="$(osascript -l JavaScript "$BADGE_JS" "$(app_icon)" "$label" "$color" "$tmp/icon.iconset" 2>&1)" || die "icon render failed: $out"
+  iconutil -c icns "$tmp/icon.iconset" -o "$launcher/Contents/Resources/applet.icns"
+
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier io.github.eshirdel.mpfc.$slug" "$launcher/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string io.github.eshirdel.mpfc.$slug" "$launcher/Contents/Info.plist"
+
+  # Changing the bundle invalidates osacompile's ad-hoc signature; sign it again.
+  codesign --force --sign - "$launcher" >/dev/null 2>&1
+  touch "$launcher"
+  [ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$launcher" >/dev/null 2>&1 || true
+  rm -rf "$tmp"
+}
+
+create_one() {
+  local name="$1" label="$2" color="$3" slug
+  slug="$(slugify "$name")"
+  [ "$slug" != "default" ] || die "'default' is reserved"
+  if [ -f "$(profile_conf "$slug")" ]; then
+    info "Profile '$name' already exists; rebuilding its launcher (data is kept)."
+  fi
+  save_profile "$slug" "$name" "$label" "$color"
+  build_launcher "$slug" "$name" "$label" "$color"
+  info "  ✓ $name  ->  $(launcher_path "$name")"
+}
+
+ask() {
+  # ask VAR "Prompt" "default"
+  local reply
+  if [ -n "$3" ]; then printf '%s [%s]: ' "$2" "$3" >&2; else printf '%s: ' "$2" >&2; fi
+  IFS= read -r reply || reply=""
+  [ -n "$reply" ] || reply="$3"
+  eval "$1=\$reply"
+}
+
+cmd_create_interactive() {
+  local count i name label color hex names="" labels="" n_used slug answer
+  info "Multi Profile for ChatGPT - each profile gets its own login, chats and projects."
+  info ""
+  while :; do
+    ask count "How many profiles do you want to create" "1"
+    case "$count" in ''|*[!0-9]*) info "Please enter a number." ;; *) [ "$count" -ge 1 ] && [ "$count" -le 20 ] && break; info "Enter 1 to 20." ;; esac
+  done
+
+  i=1
+  # shellcheck disable=SC2086 # split the palette into positional args on purpose
+  set -- $PALETTE_NAMES
+  while [ "$i" -le "$count" ]; do
+    info ""
+    while :; do
+      ask name "Profile $i name (e.g. Personal, Work)" ""
+      if ! valid_name "$name"; then info "Use letters, numbers, spaces, - or _."; continue; fi
+      slug="$(slugify "$name")"
+      case " $names " in *"|$slug|"*) info "You already used that name."; continue ;; esac
+      break
+    done
+    while :; do
+      ask label "Badge text, 1-3 characters" "$(default_label "$name")"
+      n_used=${#label}
+      [ "$n_used" -ge 1 ] && [ "$n_used" -le 3 ] && break
+      info "Use 1 to 3 characters."
+    done
+    eval "color=\${$(( (i - 1) % 8 + 1 ))}"
+    while :; do
+      ask color "Badge color ($PALETTE_NAMES or #RRGGBB)" "$color"
+      if hex="$(resolve_color "$color")"; then break; fi
+      info "Unknown color."
+    done
+    names="$names |$slug|"
+    labels="$labels$name	$label	$hex
+"
+    i=$((i + 1))
+  done
+
+  info ""
+  info "About to create:"
+  printf '%s' "$labels" | while IFS='	' read -r n l c; do printf '  ChatGPT %-20s badge %-3s %s\n' "$n" "$l" "$c"; done
+  ask answer "Continue? [Y/n]" ""
+  case "$answer" in n|N|no|NO) info "Nothing changed."; return ;; esac
+
+  printf '%s' "$labels" | while IFS='	' read -r n l c; do create_one "$n" "$l" "$c"; done
+  info ""
+  info "Done. Open the launchers from $LAUNCHER_DIR (or Spotlight). Drag them to the Dock to keep them handy."
+}
+
+cmd_create() {
+  local name="" label="" color="" hex
+  [ $# -gt 0 ] || { cmd_create_interactive; return; }
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name)  name="${2:-}"; shift 2 ;;
+      --label) label="${2:-}"; shift 2 ;;
+      --color) color="${2:-}"; shift 2 ;;
+      --yes|-y) shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  valid_name "$name" || die "--name is required (letters, numbers, spaces, - or _)"
+  [ -n "$label" ] || label="$(default_label "$name")"
+  [ ${#label} -ge 1 ] && [ ${#label} -le 3 ] || die "--label must be 1-3 characters"
+  [ -n "$color" ] || color="green"
+  hex="$(resolve_color "$color")" || die "unknown color: $color"
+  create_one "$name" "$label" "$hex"
+}
+
+cmd_list() {
+  local f slug found=0
+  for f in "$PROFILES_DIR"/*.conf; do
+    [ -f "$f" ] || continue
+    found=1
+    slug="$(basename "$f" .conf)"
+    load_profile "$slug"
+    printf '%s  (badge %s %s)\n' "$NAME" "$LABEL" "$COLOR"
+    printf '  launcher : %s%s\n' "$(launcher_path "$NAME")" "$([ -d "$(launcher_path "$NAME")" ] || echo '  [missing, run rebuild]')"
+    printf '  codex    : %s\n' "$(codex_home "$slug")"
+    printf '  app data : %s\n' "$(user_data_dir "$NAME")"
+  done
+  [ "$found" = 1 ] || info "No profiles yet. Run: chatgpt-profiles create"
+}
+
+find_slug() {
+  local slug
+  slug="$(slugify "${1:-}")"
+  [ -n "$slug" ] || die "profile name required"
+  [ -f "$(profile_conf "$slug")" ] || die "no profile named '$1' (see: chatgpt-profiles list)"
+  echo "$slug"
+}
+
+cmd_open() {
+  local slug
+  slug="$(find_slug "${1:-}")"
+  load_profile "$slug"
+  [ -d "$(launcher_path "$NAME")" ] || build_launcher "$slug" "$NAME" "$LABEL" "$COLOR"
+  open "$(launcher_path "$NAME")"
+}
+
+cmd_rebuild() {
+  local f slug
+  if [ -n "${1:-}" ]; then
+    slug="$(find_slug "$1")"; load_profile "$slug"
+    build_launcher "$slug" "$NAME" "$LABEL" "$COLOR"; info "  ✓ rebuilt $NAME"; return
+  fi
+  for f in "$PROFILES_DIR"/*.conf; do
+    [ -f "$f" ] || continue
+    slug="$(basename "$f" .conf)"; load_profile "$slug"
+    build_launcher "$slug" "$NAME" "$LABEL" "$COLOR"; info "  ✓ rebuilt $NAME"
+  done
+}
+
+cmd_remove() {
+  local slug purge=0 name_arg="" answer stamp
+  while [ $# -gt 0 ]; do
+    case "$1" in --purge) purge=1 ;; *) name_arg="$1" ;; esac
+    shift
+  done
+  slug="$(find_slug "$name_arg")"
+  load_profile "$slug"
+  rm -rf "$(launcher_path "$NAME")"
+  rm -f "$(profile_conf "$slug")"
+  info "Removed launcher for $NAME."
+  if [ "$purge" = 1 ]; then
+    info "This moves the profile's chats, projects and login to the Trash:"
+    info "  $(codex_home "$slug")"
+    info "  $(user_data_dir "$NAME")"
+    ask answer "Type the profile name to confirm" ""
+    [ "$answer" = "$NAME" ] || { info "Not confirmed; data kept."; return; }
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$HOME/.Trash"
+    [ -e "$(codex_home "$slug")" ] && mv "$(codex_home "$slug")" "$HOME/.Trash/codex-$slug-$stamp"
+    [ -e "$(user_data_dir "$NAME")" ] && mv "$(user_data_dir "$NAME")" "$HOME/.Trash/ChatGPT-$(folder_name "$NAME")-$stamp"
+    info "Moved to the Trash. Empty the Trash to delete permanently."
+  else
+    info "Data kept in $(codex_home "$slug") and $(user_data_dir "$NAME")."
+  fi
+}
+
+main() {
+  local cmd="${1:-create}"
+  [ $# -eq 0 ] || shift
+  case "$cmd" in
+    -h|--help|help) usage; return ;;
+    version|--version|-v) echo "chatgpt-profiles $VERSION"; return ;;
+  esac
+  require_macos
+  case "$cmd" in
+    create)  cmd_create "$@" ;;
+    list)    cmd_list ;;
+    open)    cmd_open "$@" ;;
+    rebuild) cmd_rebuild "$@" ;;
+    remove)  cmd_remove "$@" ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

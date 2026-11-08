@@ -61,9 +61,65 @@ stays intact and its own updater keeps working.
 
 No other dependencies: everything uses tools that ship with macOS.
 
-## Install, usage, and uninstall
+## Usage
 
-See the sections below (added as the tool lands).
+Run it without arguments and answer the questions; press Enter to accept a
+default:
+
+```text
+$ chatgpt-profiles
+How many profiles do you want to create [1]: 3
+
+Profile 1 name (e.g. Personal, Work): Personal
+Badge text, 1-3 characters [P]:
+Badge color (green slate orange purple red teal pink amber or #RRGGBB) [green]:
+...
+About to create:
+  ChatGPT Personal             badge P   #16A34A
+  ChatGPT Company              badge C   #1F2937
+  ChatGPT Pro                  badge PRO #EA580C
+Continue? [Y/n]:
+```
+
+Then open **ChatGPT Personal**, **ChatGPT Company**, and so on from
+`~/Applications`, Spotlight, or Launchpad, and sign in once in each.
+
+Other commands:
+
+| Command | What it does |
+|---|---|
+| `chatgpt-profiles create --name Work --label W --color purple` | create one profile without questions |
+| `chatgpt-profiles list` | show profiles and where their data lives |
+| `chatgpt-profiles open Work` | start a profile from the terminal |
+| `chatgpt-profiles rebuild [NAME]` | rebuild launchers and icons (for example after ChatGPT changes its icon); data is kept |
+| `chatgpt-profiles remove Work` | remove the launcher, keep the data |
+| `chatgpt-profiles remove Work --purge` | also move the profile's data to the Trash (asks you to type the name) |
+
+Creating a profile with a name that already exists only rebuilds its launcher;
+existing chats and logins are never touched.
+
+### Where data lives
+
+| What | Path |
+|---|---|
+| Codex chats, projects, memories, login | `~/.codex-<name>` |
+| Desktop app state | `~/Library/Application Support/ChatGPT-<Name>` |
+| Launcher | `~/Applications/ChatGPT <Name>.app` |
+| Profile settings (name, badge) | `~/.config/multi-profile-for-chatgpt/profiles/` |
+
+Your original ChatGPT (`~/.codex`) is not touched and keeps working as before.
+
+### Good to know
+
+- **One login per profile.** Don't copy one profile's login files into another
+  profile or another computer. The login token is renewed regularly, and two
+  copies of it can sign each other out.
+- **The Dock shows the ChatGPT icon** for every running profile, because they
+  are all the same app. The colored badge is on the launchers; drag them to the
+  Dock to start the right profile.
+- Some workspaces (for example business workspaces with local Codex disabled by
+  an admin) do not show local projects. That is a workspace setting, not this
+  tool.
 
 ## License
 
