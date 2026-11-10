@@ -63,9 +63,16 @@ jobs:
           "$C" create --name Sandbox --preset sandbox --root "$HOME/ProfileData/Sandbox"
 
           for n in Personal Company Friend Client Third-Party Sandbox; do
-            L="$MPFC_LAUNCHER_DIR/ChatGPT $n.app"
+            slug="$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]')"
+            L="$MPFC_LAUNCHER_DIR/ChatGPT Profiles/$slug/ChatGPT $n.app"
+            M="$MPFC_LAUNCHER_DIR/ChatGPT Profiles/$slug/profile.json"
             test -s "$L/Contents/Resources/applet.icns"
             codesign --verify "$L"
+            test -s "$M"
+            grep -F "\"appPath\": \"$L\"" "$M"
+            grep -F "\"root\": \"$HOME/ProfileData/$n\"" "$M"
+            grep -F "\"codexHome\": \"$HOME/ProfileData/$n/codex\"" "$M"
+            grep -F "\"electronUserData\": \"$HOME/ProfileData/$n/electron\"" "$M"
             test -d "$HOME/ProfileData/$n/codex"
             test -d "$HOME/ProfileData/$n/electron"
             test -x "$HOME/ProfileData/$n/runtime/codex-wrapper.sh"

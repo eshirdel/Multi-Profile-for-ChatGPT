@@ -19,19 +19,20 @@ info() { printf '%s\n' "$*"; }
 [ "$(uname -s)" = "Darwin" ] || die "Multi Profile for ChatGPT only runs on macOS"
 
 install_from_dir() {
-  local src="$1" version dest runtime
+  local src="$1" version dest runtime tmpdest
   [ -f "$src/VERSION" ] && [ -x "$src/bin/chatgpt-profiles" ] || die "$src does not look like a release"
   version="$(tr -d '[:space:]' < "$src/VERSION")"
   case "$version" in ''|*[!0-9.]*) die "bad VERSION in $src" ;; esac
   dest="$PREFIX/versions/$version"
 
   mkdir -p "$PREFIX/versions"
-  rm -rf "$dest.tmp"
-  mkdir -p "$dest.tmp"
+  if [ -e "$dest" ]; then
+    dest="$PREFIX/versions/$version-$(date +%Y%m%d-%H%M%S)-$$"
+  fi
+  tmpdest="$(mktemp -d "$PREFIX/versions/.install-$version.XXXXXX")"
   # Only what is needed at runtime.
-  cp -R "$src/bin" "$src/lib" "$src/VERSION" "$src/LICENSE" "$src/NOTICE" "$src/README.md" "$src/install.sh" "$dest.tmp/"
-  rm -rf "$dest"
-  mv "$dest.tmp" "$dest"
+  cp -R "$src/bin" "$src/lib" "$src/VERSION" "$src/LICENSE" "$src/NOTICE" "$src/README.md" "$src/install.sh" "$tmpdest/"
+  mv "$tmpdest" "$dest"
 
   ln -sfn "$dest" "$PREFIX/current"
 
@@ -46,10 +47,9 @@ install_from_dir() {
       || info "Manager launcher could not be built; reinstall the app runtime"
   fi
 
-  # Keep the two newest versions for a manual rollback.
-  find "$PREFIX/versions" -mindepth 1 -maxdepth 1 -type d ! -name "*.tmp" -exec basename {} \; | sort -t. -k1,1n -k2,2n -k3,3n | sed -e '$d' | sed -e '$d' | while read -r old; do
-    [ "$PREFIX/versions/$old" = "$dest" ] || rm -rf "$PREFIX/versions/$old"
-  done
+  # Rebuild generated profile launchers into the current per-profile app layout.
+  # Existing profile data and older launchers are preserved.
+  "$runtime" rebuild >/dev/null 2>&1 || true
 
   info "Installed Multi Profile for ChatGPT $version"
   info "Profile Manager: $HOME/Applications/ChatGPT Profiles.app"

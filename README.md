@@ -72,6 +72,36 @@ A data root also cannot be assigned to two profiles.
 This is intentionally stricter than simply launching ChatGPT with a different
 `--user-data-dir`.
 
+## Per-profile app endpoints
+
+Every isolated profile has a stable, addressable macOS app path:
+
+```text
+~/Applications/ChatGPT Profiles/<slug>/ChatGPT <Name>.app
+```
+
+Examples:
+
+```text
+~/Applications/ChatGPT Profiles/personal/ChatGPT Personal.app
+~/Applications/ChatGPT Profiles/company/ChatGPT Company.app
+~/Applications/ChatGPT Profiles/friend/ChatGPT Friend.app
+```
+
+Each profile directory also contains a machine-readable `profile.json` with:
+
+- profile name and slug
+- preset
+- exact app path
+- profile root
+- `CODEX_HOME`
+- Electron user-data path
+- profile launcher bundle identifier
+
+This is the preferred integration point for Cloud, automation, scripts, or any tool that must target one specific ChatGPT profile without guessing which session to open.
+
+The generated launcher app has its own filename, display name, bundle identifier and icon. The signed OpenAI ChatGPT process it starts remains the official `com.openai.codex` app, so the actual running Dock/menu-bar identity is still constrained by the official bundle signature.
+
 ## Account vs workspace
 
 Local isolation and ChatGPT account/workspace selection are separate concepts.

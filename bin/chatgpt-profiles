@@ -11,6 +11,7 @@ REPO="eshirdel/Multi-Profile-for-ChatGPT"
 APP="${CHATGPT_APP:-/Applications/ChatGPT.app}"
 PREFIX="${MPFC_PREFIX:-$HOME/.local/share/multi-profile-for-chatgpt}"
 LAUNCHER_DIR="${MPFC_LAUNCHER_DIR:-$HOME/Applications}"
+PROFILE_APPS_DIR="${MPFC_PROFILE_APPS_DIR:-$LAUNCHER_DIR/ChatGPT Profiles}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/multi-profile-for-chatgpt"
 PROFILES_DIR="$CONFIG_DIR/profiles"
 ICONS_DIR="$CONFIG_DIR/icons"
@@ -138,7 +139,14 @@ normalize_root() {
 }
 
 profile_conf() { echo "$PROFILES_DIR/$1.conf"; }
-launcher_path() { echo "$LAUNCHER_DIR/ChatGPT $1.app"; }
+profile_app_dir() { echo "$PROFILE_APPS_DIR/$1"; }
+launcher_path_for_slug() { echo "$(profile_app_dir "$1")/ChatGPT $2.app"; }
+launcher_path() {
+  local slug
+  slug="$(slugify "$1")"
+  launcher_path_for_slug "$slug" "$1"
+}
+profile_manifest() { echo "$(profile_app_dir "$1")/profile.json"; }
 default_profile_root() { echo "$DEFAULT_ROOT_BASE/$1"; }
 legacy_codex_home() { echo "$HOME/.codex-$1"; }
 legacy_user_data_dir() { echo "$APP_SUPPORT/ChatGPT-$2"; }
@@ -289,6 +297,7 @@ EOF
     printf 'expected_home=%q\n' "$home"
     printf 'expected_data=%q\n' "$data"
     printf 'expected_cli=%q\n' "$wrapper"
+    printf 'profile_title=%q\n' "ChatGPT $NAME"
     printf 'app=%q\n' "$APP"
     cat <<'EOF'
 set -euo pipefail
@@ -313,11 +322,13 @@ chmod 700 "$expected_home" "$expected_data"
 export CODEX_HOME="$expected_home"
 export CODEX_ELECTRON_USER_DATA_PATH="$expected_data"
 export CODEX_CLI_PATH="$expected_cli"
+export CODEX_APP_TITLE="$profile_title"
 
 exec /usr/bin/open -n \
   --env CODEX_HOME="$CODEX_HOME" \
   --env CODEX_ELECTRON_USER_DATA_PATH="$CODEX_ELECTRON_USER_DATA_PATH" \
   --env CODEX_CLI_PATH="$CODEX_CLI_PATH" \
+  --env CODEX_APP_TITLE="$CODEX_APP_TITLE" \
   "$app" --args "--user-data-dir=$expected_data"
 EOF
   } > "$launch"
@@ -325,6 +336,30 @@ EOF
   chmod 700 "$wrapper" "$launch"
   printf '%s\n' "$launch"
 }
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_profile_manifest() {
+  local slug="$1" launcher="$2" home="$3" data="$4" dir
+  dir="$(profile_app_dir "$slug")"
+  mkdir -p "$dir"
+  umask 077
+  cat > "$(profile_manifest "$slug")" <<EOF
+{
+  "name": "$(json_escape "$NAME")",
+  "slug": "$(json_escape "$slug")",
+  "preset": "$(json_escape "$PRESET")",
+  "appPath": "$(json_escape "$launcher")",
+  "root": "$(json_escape "$PROFILE_ROOT")",
+  "codexHome": "$(json_escape "$home")",
+  "electronUserData": "$(json_escape "$data")",
+  "bundleIdentifier": "io.github.eshirdel.mpfc.$slug"
+}
+EOF
+  chmod 600 "$(profile_manifest "$slug")"
+}
+
 build_profile_launcher() {
   local slug="$1"
   local launcher home data tmp out mode launch_script
@@ -335,8 +370,8 @@ build_profile_launcher() {
   data="$(user_data_loaded "$slug")"
   tmp="$(mktemp -d)"
 
-  mkdir -p "$home" "$data" "$LAUNCHER_DIR"
-  chmod 700 "$home" "$data"
+  mkdir -p "$home" "$data" "$(profile_app_dir "$slug")"
+  chmod 700 "$home" "$data" "$(profile_app_dir "$slug")"
 
   if [ -n "$PROFILE_ROOT" ]; then
     launch_script="$(build_profile_runtime "$slug" "$home" "$data")"
@@ -368,13 +403,18 @@ EOF
 
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier io.github.eshirdel.mpfc.$slug" "$tmp/ChatGPT $NAME.app/Contents/Info.plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string io.github.eshirdel.mpfc.$slug" "$tmp/ChatGPT $NAME.app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName ChatGPT $NAME" "$tmp/ChatGPT $NAME.app/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleName string ChatGPT $NAME" "$tmp/ChatGPT $NAME.app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ChatGPT $NAME" "$tmp/ChatGPT $NAME.app/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string ChatGPT $NAME" "$tmp/ChatGPT $NAME.app/Contents/Info.plist"
   codesign --force --sign - "$tmp/ChatGPT $NAME.app" >/dev/null 2>&1
 
-  # Replace only the generated launcher, never profile data.
+  # Preserve any previous generated launcher as a timestamped backup.
   if [ -e "$launcher" ]; then
-    mv "$launcher" "$tmp/old-launcher.app"
+    mv "$launcher" "$(profile_app_dir "$slug")/ChatGPT $NAME.previous-$(date +%Y%m%d-%H%M%S).app"
   fi
   mv "$tmp/ChatGPT $NAME.app" "$launcher"
+  write_profile_manifest "$slug" "$launcher" "$home" "$data"
   touch "$launcher"
   [ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$launcher" >/dev/null 2>&1 || true
   rm -rf "$tmp"
