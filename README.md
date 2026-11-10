@@ -103,6 +103,16 @@ The built-in marks use macOS SF Symbols; no icon assets are downloaded.
 You can also choose a local `.icns`, `.png`, `.jpg`, `.jpeg`, or `.tiff`
 file, or use a 1–3 character text badge.
 
+## Notification identity on macOS
+
+Each generated profile launcher has its own bundle identifier and visual identity, but the actual ChatGPT process is still the official signed OpenAI app.
+
+On the current macOS build, the official ChatGPT bundle is signed as `com.openai.codex` with OpenAI-owned production notification entitlements and application groups. That means profile data, sessions, Codex state, CLI path, launcher identity and icons can be isolated safely, while macOS system notification delivery may still be grouped under the official ChatGPT identity.
+
+This project deliberately does **not** clone, rewrite and ad-hoc re-sign the 1.9 GB ChatGPT.app to fake separate push-notification identities. Doing that would invalidate OpenAI's signed push/application-group entitlements and could break login, native helpers or notifications themselves.
+
+If OpenAI exposes a supported per-profile notification identity or signed multi-bundle mechanism in the future, this project can adopt it without weakening the current isolation model.
+
 ## Safety around existing data
 
 Installing or creating profiles does **not**:
