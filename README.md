@@ -1,65 +1,101 @@
 # Multi Profile for ChatGPT
 
-Run several fully separate copies of the official ChatGPT desktop app on
-macOS, side by side: one per account or workspace, each with its own login,
-chats, projects, and settings, and its own easy-to-spot icon.
+Run multiple fully isolated copies of the official ChatGPT desktop app on macOS, with a native profile picker inspired by Chrome Profiles.
 
-> **Unofficial project.** Multi Profile for ChatGPT is not affiliated with,
-> endorsed by, or sponsored by OpenAI. It does not ship, modify, or
-> redistribute the ChatGPT app. It only starts the app that is already
-> installed on your Mac, in a separate profile.
+> **Unofficial project.** Not affiliated with, endorsed by, or sponsored by OpenAI. It does not modify or redistribute the ChatGPT app.
 
-## Why
+## What v0.2 adds
 
-The ChatGPT desktop app (including Codex) keeps one login and one set of
-chats per macOS user. If you have more than one account, or a personal and a
-work workspace, you normally have to log out and back in to switch, and your
-local projects and chats get mixed together.
+Opening **ChatGPT Profiles** shows a native profile manager instead of immediately creating or opening multiple instances.
 
-With this tool you get, for example:
+The manager always shows:
 
-| Launcher | Use it for |
+- **Original** — your existing ChatGPT installation, login, chats and local state. This profile is never copied, migrated or modified by the tool.
+- Existing isolated profiles.
+- **New Instance** — creates exactly one new isolated profile.
+
+New Instance includes presets for:
+
+- Company
+- Work
+- Personal
+- Client
+- Third Party
+- Testing
+- Sandbox
+- Temporary
+- Custom
+
+Each preset can be renamed and given its own data root, accent color, custom logo, or optional text badge.
+
+## Isolation model
+
+Every new profile gets one dedicated root:
+
+```text
+<root>/
+  codex/      # CODEX_HOME
+  electron/   # Electron user-data
+```
+
+The launcher starts the official `/Applications/ChatGPT.app` with:
+
+- `CODEX_HOME=<root>/codex`
+- `CODEX_ELECTRON_USER_DATA_PATH=<root>/electron`
+- `--user-data-dir=<root>/electron`
+
+A root cannot be reused by another profile.
+
+The original ChatGPT profile is not moved into this layout. Choosing **Original** simply opens the normal ChatGPT app.
+
+## Profile icons
+
+The base icon is always the icon from your installed ChatGPT app.
+
+A small profile mark is overlaid in the lower-right corner:
+
+| Preset | Overlay |
 |---|---|
-| ChatGPT Personal | your own account, personal workspace |
-| ChatGPT Company | the same account, company workspace |
-| ChatGPT Pro | a second account |
+| Company | briefcase |
+| Work | work/tool symbol |
+| Personal | person |
+| Client | people |
+| Third Party | link |
+| Testing | tools |
+| Sandbox | cube |
+| Temporary | clock |
+| Custom | star or your custom image |
 
-Each one can be open at the same time as the others.
+The built-in marks use macOS SF Symbols. No icon assets are downloaded.
 
-## How it works
+You may instead choose a local `.icns`, `.png`, `.jpg`, `.jpeg`, or `.tiff` file. A private copy is stored in the tool configuration so moving the source image later does not break the launcher.
 
-The ChatGPT app supports separate instances through two environment
-variables, which it also uses itself when it opens a new instance:
+A 1–3 character text badge can also be used.
 
-- `CODEX_HOME`: where Codex keeps chats, projects, memories, and login
-- `CODEX_ELECTRON_USER_DATA_PATH`: where the desktop app keeps its own state
+## Safety around existing data
 
-For every profile, Multi Profile for ChatGPT:
+Creating or installing this tool does **not**:
 
-1. creates a private Codex home, `~/.codex-<profile>`
-2. creates a private app data folder,
-   `~/Library/Application Support/ChatGPT-<Profile>`
-3. builds a small launcher app, `~/Applications/ChatGPT <Profile>.app`, that
-   starts the official `/Applications/ChatGPT.app` with those two folders
-4. draws the launcher icon from the icon of your installed ChatGPT app, with a
-   colored badge on top, so each profile is easy to tell apart
+- log out the existing ChatGPT app
+- delete or migrate `~/.codex`
+- delete or migrate existing ChatGPT Application Support data
+- copy the Original login into another profile
+- launch multiple profiles automatically
 
-Nothing inside `/Applications/ChatGPT.app` is changed, so its code signature
-stays intact and its own updater keeps working.
+Rebuilding a generated launcher only replaces that launcher. Its profile data root is kept.
 
-## Updates
+Changing the root of an existing profile is refused automatically instead of silently making the profile appear empty.
 
-- **ChatGPT itself** updates through its official built-in updater. Every
-  profile uses the same installed app, so all profiles get the new version at
-  once.
-- **This tool** updates from the releases of this repository (see below).
+`remove NAME` removes the generated launcher/config but keeps profile data.
+
+`remove NAME --purge` requires typing the profile name and then moves only that isolated profile's data to the Trash.
 
 ## Requirements
 
 - macOS
-- The official ChatGPT desktop app installed in `/Applications/ChatGPT.app`
+- Official ChatGPT desktop app installed at `/Applications/ChatGPT.app`
 
-No other dependencies: everything uses tools that ship with macOS.
+No third-party runtime dependencies are required.
 
 ## Install
 
@@ -67,112 +103,92 @@ No other dependencies: everything uses tools that ship with macOS.
 curl -fsSL https://github.com/eshirdel/Multi-Profile-for-ChatGPT/releases/latest/download/install.sh | bash
 ```
 
-The installer downloads the latest release, checks its SHA-256 checksum, and
-installs it to `~/.local/share/multi-profile-for-chatgpt`, with the
-`chatgpt-profiles` command linked in `~/.local/bin`. If that folder is not on
-your `PATH`, the installer prints the line to add.
+The installer verifies the release tarball SHA-256 and installs:
 
-Prefer to read before you run? Download `install.sh` from the
-[latest release](https://github.com/eshirdel/Multi-Profile-for-ChatGPT/releases/latest),
-look at it, then run `bash install.sh`. From a clone, `./install.sh --local .`
-installs the checked-out version.
+- runtime under `~/.local/share/multi-profile-for-chatgpt`
+- `chatgpt-profiles` under `~/.local/bin`
+- **ChatGPT Profiles.app** under `~/Applications`
 
-## Update
+The installer builds the profile manager launcher but does not open ChatGPT or alter existing ChatGPT login/history.
+
+For a reviewed checkout:
 
 ```bash
-chatgpt-profiles update          # install the newest release, then refresh launchers
-chatgpt-profiles update --check  # only tell me if there is one
+./install.sh --local .
 ```
 
-Updates are verified the same way as the install. Profile data is never
-touched. ChatGPT itself keeps updating through its own built-in updater.
+## Use
 
-## Uninstall
+Open **ChatGPT Profiles** from `~/Applications`, Spotlight, or Launchpad.
+
+Or run:
 
 ```bash
-chatgpt-profiles remove <Name>            # per profile; add --purge to also trash its data
-rm -rf ~/.local/share/multi-profile-for-chatgpt ~/.local/bin/chatgpt-profiles
-rm -rf ~/.config/multi-profile-for-chatgpt
+chatgpt-profiles
 ```
 
-## Usage
+Both open the profile manager.
 
-Run it without arguments and answer the questions; press Enter to accept a
-default:
+### Create one profile from the command line
+
+```bash
+chatgpt-profiles create \
+  --name Company \
+  --preset company \
+  --root "$HOME/ChatGPT-Profiles/company"
+```
+
+Optional flags:
 
 ```text
-$ chatgpt-profiles
-How many profiles do you want to create [1]: 3
-
-Profile 1 name (e.g. Personal, Work): Personal
-Badge text, 1-3 characters [P]:
-Badge color (green slate orange purple red teal pink amber or #RRGGBB) [green]:
-...
-About to create:
-  ChatGPT Personal             badge P   #16A34A
-  ChatGPT Company              badge C   #1F2937
-  ChatGPT Pro                  badge PRO #EA580C
-Continue? [Y/n]:
+--icon FILE
+--label TEXT
+--color COLOR
+--open
 ```
 
-Then open **ChatGPT Personal**, **ChatGPT Company**, and so on from
-`~/Applications`, Spotlight, or Launchpad, and sign in once in each.
+Creating a profile creates exactly one instance. It does not create the preset list as actual profiles.
 
-Other commands:
+### Other commands
 
-| Command | What it does |
-|---|---|
-| `chatgpt-profiles create --name Work --label W --color purple` | create one profile without questions |
-| `chatgpt-profiles list` | show profiles and where their data lives |
-| `chatgpt-profiles open Work` | start a profile from the terminal |
-| `chatgpt-profiles rebuild [NAME]` | rebuild launchers and icons (for example after ChatGPT changes its icon); data is kept |
-| `chatgpt-profiles remove Work` | remove the launcher, keep the data |
-| `chatgpt-profiles remove Work --purge` | also move the profile's data to the Trash (asks you to type the name) |
+```bash
+chatgpt-profiles list
+chatgpt-profiles open Company
+chatgpt-profiles rebuild Company
+chatgpt-profiles rebuild
+chatgpt-profiles remove Company
+chatgpt-profiles remove Company --purge
+chatgpt-profiles manager-install
+chatgpt-profiles update --check
+chatgpt-profiles update
+```
 
-Creating a profile with a name that already exists only rebuilds its launcher;
-existing chats and logins are never touched.
+## Existing v0.1 profiles
 
-### Where data lives
+v0.1 profiles used legacy paths such as `~/.codex-<profile>` and `~/Library/Application Support/ChatGPT-<Profile>`.
 
-| What | Path |
-|---|---|
-| Codex chats, projects, memories, login | `~/.codex-<name>` |
-| Desktop app state | `~/Library/Application Support/ChatGPT-<Name>` |
-| Launcher | `~/Applications/ChatGPT <Name>.app` |
-| Profile settings (name, badge) | `~/.config/multi-profile-for-chatgpt/profiles/` |
+v0.2 continues to read and rebuild those profiles without moving their data. It does not automatically migrate them to a new root.
 
-Your original ChatGPT (`~/.codex`) is not touched and keeps working as before.
+## Updates
 
-### Good to know
+ChatGPT itself continues to update through the official ChatGPT updater.
 
-- **One login per profile.** Don't copy one profile's login files into another
-  profile or another computer. The login token is renewed regularly, and two
-  copies of it can sign each other out.
-- **The Dock shows the ChatGPT icon** for every running profile, because they
-  are all the same app. The colored badge is on the launchers; drag them to the
-  Dock to start the right profile.
-- Some workspaces (for example business workspaces with local Codex disabled by
-  an admin) do not show local projects. That is a workspace setting, not this
-  tool.
+This tool updates from GitHub releases. Updates refresh generated launchers but do not move profile data.
 
-## Contributing
+## Development and CI
 
-Issues and pull requests are welcome. Please keep the tool dependency-free
-(only what ships with macOS) and compatible with the macOS system bash 3.2.
-CI runs `shellcheck` and a full create/list/rebuild/remove cycle on macOS for
-every pull request.
+CI runs:
 
-### Releasing
-
-1. Update `VERSION` (for example `0.2.0`) and commit.
-2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
-
-The release workflow checks that the tag matches `VERSION`, then publishes the
-tarball, its SHA-256, and `install.sh`. Existing installs pick it up with
-`chatgpt-profiles update`.
+- ShellCheck
+- install on macOS
+- native manager launcher build and code-sign verification
+- multiple isolated profile creation
+- root-collision rejection
+- reserved Original protection
+- launcher rebuild
+- non-destructive remove behavior
+- JXA manager load test
 
 ## License
 
-Apache License 2.0. You are welcome to use, change, and contribute. If you
-redistribute this project or a derivative of it, you must keep the
-[`NOTICE`](NOTICE) file and the copyright line, as the license requires.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

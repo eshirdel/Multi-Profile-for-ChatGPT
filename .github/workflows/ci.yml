@@ -21,36 +21,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fake ChatGPT app (runners don't have the real one)
+      - name: Fake ChatGPT app
         run: |
           mkdir -p "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Resources"
-          cp /System/Applications/Calculator.app/Contents/Resources/AppIcon.icns "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Resources/"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Info.plist"
+          cp /System/Applications/Calculator.app/Contents/Resources/AppIcon.icns             "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Resources/AppIcon.icns"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon"             "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Info.plist"
 
-      - name: Install from checkout and exercise every command
+      - name: Install and exercise isolated profiles
         env:
           CHATGPT_APP: ${{ runner.temp }}/Fake ChatGPT.app
           HOME: ${{ runner.temp }}/home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/home/.config
           MPFC_LAUNCHER_DIR: ${{ runner.temp }}/home/Applications
         run: |
           set -euo pipefail
           mkdir -p "$HOME"
+
           bash install.sh --local .
           C="$HOME/.local/bin/chatgpt-profiles"
+
           "$C" version
-          "$C" create --name "Work Laptop" --label WL --color teal
-          printf '2\nAlpha\n\n\nBeta\nB\n#123ABC\n\n' | "$C"
+          test -d "$MPFC_LAUNCHER_DIR/ChatGPT Profiles.app"
+          codesign --verify "$MPFC_LAUNCHER_DIR/ChatGPT Profiles.app"
+
+          "$C" create             --name Company             --preset company             --root "$HOME/ProfileData/Company"
+
+          "$C" create             --name Personal             --preset personal             --root "$HOME/ProfileData/Personal"
+
+          "$C" create             --name Testing             --preset testing             --root "$HOME/ProfileData/Testing"             --label QA
+
           "$C" list
-          for n in "Work Laptop" Alpha Beta; do
+
+          for n in Company Personal Testing; do
             L="$MPFC_LAUNCHER_DIR/ChatGPT $n.app"
             test -s "$L/Contents/Resources/applet.icns"
             codesign --verify "$L"
           done
+
+          for r in Company Personal Testing; do
+            test -d "$HOME/ProfileData/$r/codex"
+            test -d "$HOME/ProfileData/$r/electron"
+          done
+
+          if "$C" create               --name Collision               --preset sandbox               --root "$HOME/ProfileData/Company"; then
+            echo "duplicate root accepted"
+            exit 1
+          fi
+
+          if "$C" create --name Original --preset personal; then
+            echo "reserved Original name accepted"
+            exit 1
+          fi
+
           "$C" rebuild
-          "$C" remove Beta
-          echo Alpha | "$C" remove Alpha --purge
-          test ! -e "$HOME/.codex-alpha"
-          test -d "$HOME/.codex-beta"
-          # set -e ignores "! cmd", so check expected failures explicitly
-          if "$C" create --name "bad/name"; then echo "bad name accepted"; exit 1; fi
-          if "$C" create --name X --label TOOLONG; then echo "long label accepted"; exit 1; fi
+          MPFC_MANAGER_TEST=1 osascript -l JavaScript lib/profile-manager.js
+
+          "$C" remove Testing
+          test -d "$HOME/ProfileData/Testing/codex"
+          test -d "$HOME/ProfileData/Testing/electron"

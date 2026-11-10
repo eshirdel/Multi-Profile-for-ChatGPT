@@ -37,6 +37,13 @@ install_from_dir() {
   ln -sfn "$dest" "$PREFIX/current"
   ln -sfn "$PREFIX/current/bin/chatgpt-profiles" "$BIN_DIR/chatgpt-profiles"
 
+  # Install/refresh the Profile Manager launcher, but never launch ChatGPT or
+  # touch any existing ChatGPT login/history during installation.
+  if [ -d "${CHATGPT_APP:-/Applications/ChatGPT.app}" ]; then
+    "$BIN_DIR/chatgpt-profiles" manager-install >/dev/null \
+      || info "Manager launcher could not be built; run: chatgpt-profiles manager-install"
+  fi
+
   # Keep the two newest versions for a manual rollback.
   find "$PREFIX/versions" -mindepth 1 -maxdepth 1 -type d ! -name "*.tmp" -exec basename {} \; | sort -t. -k1,1n -k2,2n -k3,3n | sed -e '$d' | sed -e '$d' | while read -r old; do
     [ "$PREFIX/versions/$old" = "$dest" ] || rm -rf "$PREFIX/versions/$old"
