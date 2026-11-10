@@ -14,6 +14,7 @@ LAUNCHER_DIR="${MPFC_LAUNCHER_DIR:-$HOME/Applications}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/multi-profile-for-chatgpt"
 PROFILES_DIR="$CONFIG_DIR/profiles"
 ICONS_DIR="$CONFIG_DIR/icons"
+PREVIEWS_DIR="$CONFIG_DIR/previews"
 APP_SUPPORT="$HOME/Library/Application Support"
 DEFAULT_ROOT_BASE="$APP_SUPPORT/Multi Profile for ChatGPT/Profiles"
 MANAGER_APP="$LAUNCHER_DIR/ChatGPT Profiles.app"
@@ -551,11 +552,41 @@ cmd_remove() {
   info "Moved isolated profile data to the Trash."
 }
 
+build_preset_previews() {
+  local preset color_name hex tmp out icns_tmp png_src
+  mkdir -p "$PREVIEWS_DIR"
+  chmod 700 "$PREVIEWS_DIR"
+
+  for preset in $PRESET_NAMES; do
+    color_name="$(preset_color "$preset")"
+    hex="$(resolve_color "$color_name")"
+    tmp="$(mktemp -d)"
+
+    out="$(osascript -l JavaScript "$BADGE_JS" "$(app_icon)" "$preset" "__MPFC_EMPTY__" "__MPFC_EMPTY__" "$hex" "$tmp/icon.iconset" 2>&1)" || {
+      rm -rf "$tmp"
+      die "preset preview render failed for $preset: $out"
+    }
+
+    icns_tmp="$PREVIEWS_DIR/$preset.tmp.icns"
+    iconutil -c icns "$tmp/icon.iconset" -o "$icns_tmp"
+    mv "$icns_tmp" "$PREVIEWS_DIR/$preset.icns"
+
+    png_src="$tmp/icon.iconset/icon_128x128@2x.png"
+    if [ -f "$png_src" ]; then
+      cp "$png_src" "$PREVIEWS_DIR/$preset.png.tmp"
+      mv "$PREVIEWS_DIR/$preset.png.tmp" "$PREVIEWS_DIR/$preset.png"
+    fi
+
+    rm -rf "$tmp"
+  done
+}
+
 build_manager_launcher() {
   local tmp out cli
   tmp="$(mktemp -d)"
   cli="${MPFC_RUNTIME_BIN:-$self}"
   mkdir -p "$LAUNCHER_DIR"
+  build_preset_previews
 
   cat > "$tmp/manager.applescript" <<EOF
 do shell script quoted form of "$cli" & " manager-ui"
