@@ -21,11 +21,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fake ChatGPT app
+      - name: Fake ChatGPT app with bundled Codex
         run: |
-          mkdir -p "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Resources"
-          cp /System/Applications/Calculator.app/Contents/Resources/AppIcon.icns             "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Resources/AppIcon.icns"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon"             "$RUNNER_TEMP/Fake ChatGPT.app/Contents/Info.plist"
+          set -euo pipefail
+          APP="$RUNNER_TEMP/Fake ChatGPT.app"
+          mkdir -p "$APP/Contents/Resources/codex-cli/bin"
+          cp /System/Applications/Calculator.app/Contents/Resources/AppIcon.icns             "$APP/Contents/Resources/AppIcon.icns"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon"             "$APP/Contents/Info.plist"
+          cat > "$APP/Contents/Resources/codex-cli/bin/codex" <<'SH'
+          #!/bin/bash
+          printf 'FAKE_CODEX_HOME=%s\n' "${CODEX_HOME:-}"
+          printf 'FAKE_ELECTRON=%s\n' "${CODEX_ELECTRON_USER_DATA_PATH:-}"
+          printf 'FAKE_CLI_PATH=%s\n' "${CODEX_CLI_PATH:-}"
+          printf 'FAKE_ARGS=%s\n' "$*"
+          SH
+          chmod +x "$APP/Contents/Resources/codex-cli/bin/codex"
 
       - name: Install and exercise isolated profiles
         env:
@@ -38,32 +48,52 @@ jobs:
           mkdir -p "$HOME"
 
           bash install.sh --local .
-          C="$HOME/.local/bin/chatgpt-profiles"
+          C="$HOME/.local/share/multi-profile-for-chatgpt/current/bin/chatgpt-profiles"
 
           "$C" version
+          test ! -e "$HOME/.local/bin/chatgpt-profiles"
           test -d "$MPFC_LAUNCHER_DIR/ChatGPT Profiles.app"
           codesign --verify "$MPFC_LAUNCHER_DIR/ChatGPT Profiles.app"
 
-          "$C" create             --name Company             --preset company             --root "$HOME/ProfileData/Company"
+          "$C" create --name Personal --preset personal --root "$HOME/ProfileData/Personal"
+          "$C" create --name Company --preset company --root "$HOME/ProfileData/Company"
+          "$C" create --name Friend --preset friend --root "$HOME/ProfileData/Friend"
+          "$C" create --name Client --preset client --root "$HOME/ProfileData/Client"
+          "$C" create --name Third-Party --preset third-party --root "$HOME/ProfileData/Third-Party"
+          "$C" create --name Sandbox --preset sandbox --root "$HOME/ProfileData/Sandbox"
 
-          "$C" create             --name Personal             --preset personal             --root "$HOME/ProfileData/Personal"
-
-          "$C" create             --name Testing             --preset testing             --root "$HOME/ProfileData/Testing"             --label QA
-
-          "$C" list
-
-          for n in Company Personal Testing; do
+          for n in Personal Company Friend Client Third-Party Sandbox; do
             L="$MPFC_LAUNCHER_DIR/ChatGPT $n.app"
             test -s "$L/Contents/Resources/applet.icns"
             codesign --verify "$L"
+            test -d "$HOME/ProfileData/$n/codex"
+            test -d "$HOME/ProfileData/$n/electron"
+            test -x "$HOME/ProfileData/$n/runtime/codex-wrapper.sh"
+            test -x "$HOME/ProfileData/$n/runtime/launch-profile.sh"
           done
 
-          for r in Company Personal Testing; do
-            test -d "$HOME/ProfileData/$r/codex"
-            test -d "$HOME/ProfileData/$r/electron"
-          done
+          WRAPPER="$HOME/ProfileData/Company/runtime/codex-wrapper.sh"
+          EXPECTED_HOME="$HOME/ProfileData/Company/codex"
+          EXPECTED_DATA="$HOME/ProfileData/Company/electron"
 
-          if "$C" create               --name Collision               --preset sandbox               --root "$HOME/ProfileData/Company"; then
+          CODEX_HOME="$EXPECTED_HOME"           CODEX_ELECTRON_USER_DATA_PATH="$EXPECTED_DATA"           CODEX_CLI_PATH="$WRAPPER"             "$WRAPPER" app-server | grep -F "shell_environment_policy.set.PATH="
+
+          set +e
+          CODEX_HOME="$HOME/ProfileData/Personal/codex"           CODEX_ELECTRON_USER_DATA_PATH="$EXPECTED_DATA"           CODEX_CLI_PATH="$WRAPPER"             "$WRAPPER" app-server >/dev/null 2>&1
+          rc_home=$?
+
+          CODEX_HOME="$EXPECTED_HOME"           CODEX_ELECTRON_USER_DATA_PATH="$HOME/ProfileData/Personal/electron"           CODEX_CLI_PATH="$WRAPPER"             "$WRAPPER" app-server >/dev/null 2>&1
+          rc_data=$?
+
+          CODEX_HOME="$EXPECTED_HOME"           CODEX_ELECTRON_USER_DATA_PATH="$EXPECTED_DATA"           CODEX_CLI_PATH="$HOME/not-this-profile"             "$WRAPPER" app-server >/dev/null 2>&1
+          rc_cli=$?
+          set -e
+
+          test "$rc_home" -eq 64
+          test "$rc_data" -eq 64
+          test "$rc_cli" -eq 64
+
+          if "$C" create --name Collision --preset sandbox --root "$HOME/ProfileData/Company"; then
             echo "duplicate root accepted"
             exit 1
           fi
@@ -76,6 +106,6 @@ jobs:
           "$C" rebuild
           MPFC_MANAGER_TEST=1 osascript -l JavaScript lib/profile-manager.js
 
-          "$C" remove Testing
-          test -d "$HOME/ProfileData/Testing/codex"
-          test -d "$HOME/ProfileData/Testing/electron"
+          "$C" remove Friend
+          test -d "$HOME/ProfileData/Friend/codex"
+          test -d "$HOME/ProfileData/Friend/electron"

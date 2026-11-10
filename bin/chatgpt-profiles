@@ -9,6 +9,7 @@ set -euo pipefail
 REPO="eshirdel/Multi-Profile-for-ChatGPT"
 
 APP="${CHATGPT_APP:-/Applications/ChatGPT.app}"
+PREFIX="${MPFC_PREFIX:-$HOME/.local/share/multi-profile-for-chatgpt}"
 LAUNCHER_DIR="${MPFC_LAUNCHER_DIR:-$HOME/Applications}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/multi-profile-for-chatgpt"
 PROFILES_DIR="$CONFIG_DIR/profiles"
@@ -19,7 +20,7 @@ MANAGER_APP="$LAUNCHER_DIR/ChatGPT Profiles.app"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 PALETTE_NAMES="green slate orange purple red teal pink amber"
-PRESET_NAMES="company work personal client third-party testing sandbox temporary custom"
+PRESET_NAMES="personal company friend client third-party sandbox"
 
 palette_hex() {
   case "$1" in
@@ -34,11 +35,10 @@ preset_color() {
     company) echo "slate" ;;
     work) echo "teal" ;;
     personal) echo "purple" ;;
+    friend) echo "amber" ;;
     client) echo "green" ;;
     third-party) echo "orange" ;;
-    testing) echo "red" ;;
     sandbox) echo "purple" ;;
-    temporary) echo "slate" ;;
     *) echo "pink" ;;
   esac
 }
@@ -217,9 +217,116 @@ app_icon() {
   echo "$APP/Contents/Resources/$icon"
 }
 
+bundled_codex() {
+  local codex="$APP/Contents/Resources/codex-cli/bin/codex"
+  [ -x "$codex" ] || die "bundled Codex executable not found: $codex"
+  printf '%s\n' "$codex"
+}
+
+build_profile_runtime() {
+  local slug="$1" home="$2" data="$3" runtime wrapper launch real_codex
+  runtime="$PROFILE_ROOT/runtime"
+  wrapper="$runtime/codex-wrapper.sh"
+  launch="$runtime/launch-profile.sh"
+  real_codex="$(bundled_codex)"
+
+  mkdir -p "$runtime"
+  chmod 700 "$runtime"
+
+  {
+    printf '%s\n' '#!/bin/bash'
+    printf 'expected_home=%q\n' "$home"
+    printf 'expected_data=%q\n' "$data"
+    printf 'expected_cli=%q\n' "$wrapper"
+    printf 'real_codex=%q\n' "$real_codex"
+    cat <<'EOF'
+set -euo pipefail
+
+canonical_dir() {
+  if [ -d "$1" ]; then
+    (CDPATH= cd -P -- "$1" && pwd -P)
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+actual_home="${CODEX_HOME:-}"
+[ -n "$actual_home" ] || {
+  printf 'profile isolation: CODEX_HOME is unset\n' >&2
+  exit 64
+}
+[ "$(canonical_dir "$actual_home")" = "$(canonical_dir "$expected_home")" ] || {
+  printf 'profile isolation: refusing CODEX_HOME=%s; expected %s\n' "$actual_home" "$expected_home" >&2
+  exit 64
+}
+[ "${CODEX_ELECTRON_USER_DATA_PATH:-}" = "$expected_data" ] || {
+  printf 'profile isolation: refusing CODEX_ELECTRON_USER_DATA_PATH=%s; expected %s\n' "${CODEX_ELECTRON_USER_DATA_PATH:-<unset>}" "$expected_data" >&2
+  exit 64
+}
+[ "${CODEX_CLI_PATH:-}" = "$expected_cli" ] || {
+  printf 'profile isolation: refusing CODEX_CLI_PATH=%s; expected %s\n' "${CODEX_CLI_PATH:-<unset>}" "$expected_cli" >&2
+  exit 64
+}
+[ -x "$real_codex" ] || {
+  printf 'profile isolation: bundled Codex is missing: %s\n' "$real_codex" >&2
+  exit 69
+}
+
+codex_bin="$(dirname "$real_codex")"
+case ":${PATH:-}:" in
+  *":$codex_bin:"*) ;;
+  *) PATH="$codex_bin${PATH:+:$PATH}" ;;
+esac
+export PATH
+
+exec "$real_codex" -c "shell_environment_policy.set.PATH=$PATH" "$@"
+EOF
+  } > "$wrapper"
+
+  {
+    printf '%s\n' '#!/bin/bash'
+    printf 'expected_home=%q\n' "$home"
+    printf 'expected_data=%q\n' "$data"
+    printf 'expected_cli=%q\n' "$wrapper"
+    printf 'app=%q\n' "$APP"
+    cat <<'EOF'
+set -euo pipefail
+
+refuse_mismatch() {
+  key="$1"
+  current="$2"
+  expected="$3"
+  if [ -n "$current" ] && [ "$current" != "$expected" ]; then
+    printf 'profile isolation: refusing %s=%s; expected %s\n' "$key" "$current" "$expected" >&2
+    exit 64
+  fi
+}
+
+refuse_mismatch CODEX_HOME "${CODEX_HOME:-}" "$expected_home"
+refuse_mismatch CODEX_ELECTRON_USER_DATA_PATH "${CODEX_ELECTRON_USER_DATA_PATH:-}" "$expected_data"
+refuse_mismatch CODEX_CLI_PATH "${CODEX_CLI_PATH:-}" "$expected_cli"
+
+mkdir -p "$expected_home" "$expected_data"
+chmod 700 "$expected_home" "$expected_data"
+
+export CODEX_HOME="$expected_home"
+export CODEX_ELECTRON_USER_DATA_PATH="$expected_data"
+export CODEX_CLI_PATH="$expected_cli"
+
+exec /usr/bin/open -n \
+  --env CODEX_HOME="$CODEX_HOME" \
+  --env CODEX_ELECTRON_USER_DATA_PATH="$CODEX_ELECTRON_USER_DATA_PATH" \
+  --env CODEX_CLI_PATH="$CODEX_CLI_PATH" \
+  "$app" --args "--user-data-dir=$expected_data"
+EOF
+  } > "$launch"
+
+  chmod 700 "$wrapper" "$launch"
+  printf '%s\n' "$launch"
+}
 build_profile_launcher() {
   local slug="$1"
-  local launcher home data tmp out mode
+  local launcher home data tmp out mode launch_script
   load_profile "$slug"
 
   launcher="$(launcher_path "$NAME")"
@@ -230,11 +337,19 @@ build_profile_launcher() {
   mkdir -p "$home" "$data" "$LAUNCHER_DIR"
   chmod 700 "$home" "$data"
 
-  cat > "$tmp/launch.applescript" <<EOF
+  if [ -n "$PROFILE_ROOT" ]; then
+    launch_script="$(build_profile_runtime "$slug" "$home" "$data")"
+    cat > "$tmp/launch.applescript" <<EOF
+do shell script quoted form of "$launch_script"
+EOF
+  else
+    # v0.1 compatibility: preserve legacy data paths exactly and do not migrate.
+    cat > "$tmp/launch.applescript" <<EOF
 set codexHome to "$home"
 set userData to "$data"
 do shell script "/bin/mkdir -p " & quoted form of codexHome & " " & quoted form of userData & " && /usr/bin/open -n --env CODEX_HOME=" & quoted form of codexHome & " --env CODEX_ELECTRON_USER_DATA_PATH=" & quoted form of userData & " " & quoted form of "$APP" & " --args " & quoted form of ("--user-data-dir=" & userData)
 EOF
+  fi
 
   out="$(osacompile -o "$tmp/ChatGPT $NAME.app" "$tmp/launch.applescript" 2>&1)" || {
     rm -rf "$tmp"; die "osacompile failed: $out";
@@ -265,7 +380,7 @@ EOF
 }
 
 cmd_create() {
-  local name="" preset="custom" root="" icon="" label="" color="" hex="" open_after=0
+  local name="" preset="personal" root="" icon="" label="" color="" hex="" open_after=0
   local slug existing_root stored_icon default_color
 
   while [ $# -gt 0 ]; do
@@ -439,7 +554,7 @@ cmd_remove() {
 build_manager_launcher() {
   local tmp out cli
   tmp="$(mktemp -d)"
-  cli="$self"
+  cli="${MPFC_RUNTIME_BIN:-$self}"
   mkdir -p "$LAUNCHER_DIR"
 
   cat > "$tmp/manager.applescript" <<EOF
@@ -469,6 +584,7 @@ EOF
 
 cmd_manager_ui() {
   [ -f "$MANAGER_JS" ] || die "profile manager UI missing: $MANAGER_JS"
+  export MPFC_CLI="$self"
   exec osascript -l JavaScript "$MANAGER_JS"
 }
 
@@ -510,8 +626,9 @@ cmd_update() {
   bash "$tmp/x/multi-profile-for-chatgpt/install.sh" --local "$tmp/x/multi-profile-for-chatgpt"
   rm -rf "$tmp"
 
-  "${MPFC_BIN_DIR:-$HOME/.local/bin}/chatgpt-profiles" rebuild 2>/dev/null || true
-  "${MPFC_BIN_DIR:-$HOME/.local/bin}/chatgpt-profiles" manager-install 2>/dev/null || true
+  "$PREFIX/current/bin/chatgpt-profiles" rebuild 2>/dev/null || true
+  MPFC_RUNTIME_BIN="$PREFIX/current/bin/chatgpt-profiles" \
+    "$PREFIX/current/bin/chatgpt-profiles" manager-install 2>/dev/null || true
 }
 
 main() {
